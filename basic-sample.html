@@ -56,9 +56,10 @@ limitations under the License.
 			by <span id="asset_author">Author</span>
 		</div>
 
-		<script src="third_party/three.js/js/three.min.js"></script>
-		<script src="third_party/three.js/js/OBJLoader.js"></script>
-		<script src="third_party/three.js/js/MTLLoader.js"></script>
+		<script src="three.min.js"></script>
+		<script src="LegacyGLTFLoader.js"></script>
+		<script src="GLTFLoader.js"></script>
+		<script src="GLTFExporter.js"></script>
 		<script>
 
 			// THREE.JS VIEWER
@@ -105,7 +106,8 @@ limitations under the License.
 
 			// POLY REST API
 
-			const API_KEY = '*** INSERT YOUR API KEY HERE ***';
+			const API_KEY = ''; // XXX put yours here
+			const ASSET_ID = 'dxsTgQdLo5-';
 
 			function loadAsset( id ) {
 
@@ -120,44 +122,67 @@ limitations under the License.
 					asset_name.textContent = asset.displayName;
 					asset_author.textContent = asset.authorName;
 
-					var format = asset.formats.find( format => { return format.formatType === 'OBJ'; } );
+					var format = asset.formats.find( format => { return format.formatType === 'GLTF'; } );
+
+					console.log('got format', format);
 
 					if ( format !== undefined ) {
 
 						var obj = format.root;
-						var mtl = format.resources.find( resource => { return resource.url.endsWith( 'mtl' ) } );
+						// var mtl = format.resources.find( resource => { return resource.url.endsWith( 'mtl' ) } );
 
 						var path = obj.url.slice( 0, obj.url.indexOf( obj.relativePath ) );
 
-						var loader = new THREE.MTLLoader();
-						loader.setCrossOrigin( true );
-						loader.setMaterialOptions( { ignoreZeroRGBs: true } );
-						loader.setTexturePath( path );
-						loader.load( mtl.url, function ( materials ) {
 
-							var loader = new THREE.OBJLoader();
-							loader.setMaterials( materials );
-							loader.load( obj.url, function ( object ) {
+						var loader = new THREE.GLTFLoader();
+						// loader.setMaterials( materials );
+						function onload ( object ) {
 
-								var box = new THREE.Box3();
-								box.setFromObject( object );
+							object = object.scene;
 
-								// re-center
+							console.log('got object', object);
 
-								var center = box.getCenter();
-								center.y = box.min.y;
-								object.position.sub( center );
+							var box = new THREE.Box3();
+							box.setFromObject( object );
 
-								// scale
+							// re-center
 
-								var scaler = new THREE.Group();
-								scaler.add( object );
-								scaler.scale.setScalar( 6 / box.getSize().length() );
-								scene.add( scaler );
+							var center = box.getCenter();
+							center.y = box.min.y;
+							object.position.sub( center );
 
-							} );
+							// scale
 
-						} );
+							var scaler = new THREE.Group();
+							scaler.add( object );
+							scaler.scale.setScalar( 6 / box.getSize().length() );
+							scene.add( scaler );
+
+							var exporter = new THREE.GLTFExporter();
+
+							exporter.parse( object, gltf => {
+                const blob = new Blob([gltf], {
+                	type: 'application/octet-stream',
+                });
+                const u = URL.createObjectURL(blob);
+                console.log('got gltf', gltf, u);
+
+                a = document.createElement('a');
+								document.body.appendChild(a);
+								a.download = 'model.glb';
+								a.href = u;
+								a.click();
+							}, {
+                binary: true,
+							});
+
+						}
+						loader.load( obj.url, onload, xhr => {}, err => {
+               var loader = new THREE.LegacyGLTFLoader();
+               loader.load(obj.url, onload, xhr => {}, err => {
+                 console.warn(err.stack);
+               });
+						});
 
 					}
 
@@ -172,7 +197,7 @@ limitations under the License.
 
 			}
 
-			loadAsset( '5vbJ5vildOq' );
+			loadAsset( ASSET_ID );
 
 		</script>
 	</body>
