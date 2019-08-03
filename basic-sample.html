@@ -62,6 +62,163 @@ limitations under the License.
 		<script src="GLTFExporter.js"></script>
 		<script>
 
+var lookup = []
+var revLookup = []
+var Arr = typeof Uint8Array !== 'undefined' ? Uint8Array : Array
+
+var code = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+for (var i = 0, len = code.length; i < len; ++i) {
+  lookup[i] = code[i]
+  revLookup[code.charCodeAt(i)] = i
+}
+
+// Support decoding URL-safe base64 strings, as Node.js does.
+// See: https://en.wikipedia.org/wiki/Base64#URL_applications
+revLookup['-'.charCodeAt(0)] = 62
+revLookup['_'.charCodeAt(0)] = 63
+
+function getLens (b64) {
+  var len = b64.length
+
+  if (len % 4 > 0) {
+    throw new Error('Invalid string. Length must be a multiple of 4')
+  }
+
+  // Trim off extra bytes after placeholder bytes are found
+  // See: https://github.com/beatgammit/base64-js/issues/42
+  var validLen = b64.indexOf('=')
+  if (validLen === -1) validLen = len
+
+  var placeHoldersLen = validLen === len
+    ? 0
+    : 4 - (validLen % 4)
+
+  return [validLen, placeHoldersLen]
+}
+
+// base64 is 4/3 + up to two characters of the original data
+function byteLength (b64) {
+  var lens = getLens(b64)
+  var validLen = lens[0]
+  var placeHoldersLen = lens[1]
+  return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen
+}
+
+function _byteLength (b64, validLen, placeHoldersLen) {
+  return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen
+}
+
+function toByteArray (b64) {
+  var tmp
+  var lens = getLens(b64)
+  var validLen = lens[0]
+  var placeHoldersLen = lens[1]
+
+  var arr = new Arr(_byteLength(b64, validLen, placeHoldersLen))
+
+  var curByte = 0
+
+  // if there are placeholders, only get up to the last complete 4 chars
+  var len = placeHoldersLen > 0
+    ? validLen - 4
+    : validLen
+
+  for (var i = 0; i < len; i += 4) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 18) |
+      (revLookup[b64.charCodeAt(i + 1)] << 12) |
+      (revLookup[b64.charCodeAt(i + 2)] << 6) |
+      revLookup[b64.charCodeAt(i + 3)]
+    arr[curByte++] = (tmp >> 16) & 0xFF
+    arr[curByte++] = (tmp >> 8) & 0xFF
+    arr[curByte++] = tmp & 0xFF
+  }
+
+  if (placeHoldersLen === 2) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 2) |
+      (revLookup[b64.charCodeAt(i + 1)] >> 4)
+    arr[curByte++] = tmp & 0xFF
+  }
+
+  if (placeHoldersLen === 1) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 10) |
+      (revLookup[b64.charCodeAt(i + 1)] << 4) |
+      (revLookup[b64.charCodeAt(i + 2)] >> 2)
+    arr[curByte++] = (tmp >> 8) & 0xFF
+    arr[curByte++] = tmp & 0xFF
+  }
+
+  return arr
+}
+
+function tripletToBase64 (num) {
+  return lookup[num >> 18 & 0x3F] +
+    lookup[num >> 12 & 0x3F] +
+    lookup[num >> 6 & 0x3F] +
+    lookup[num & 0x3F]
+}
+
+function encodeChunk (uint8, start, end) {
+  var tmp
+  var output = []
+  for (var i = start; i < end; i += 3) {
+    tmp =
+      ((uint8[i] << 16) & 0xFF0000) +
+      ((uint8[i + 1] << 8) & 0xFF00) +
+      (uint8[i + 2] & 0xFF)
+    output.push(tripletToBase64(tmp))
+  }
+  return output.join('')
+}
+
+function fromByteArray (uint8) {
+  var tmp
+  var len = uint8.length
+  var extraBytes = len % 3 // if we have 1 byte left, pad 2 bytes
+  var parts = []
+  var maxChunkLength = 16383 // must be multiple of 3
+
+  // go through the array every three bytes, we'll deal with trailing stuff later
+  for (var i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
+    parts.push(encodeChunk(
+      uint8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)
+    ))
+  }
+
+  // pad the end with zeros, but make sure to not forget the extra bytes
+  if (extraBytes === 1) {
+    tmp = uint8[len - 1]
+    parts.push(
+      lookup[tmp >> 2] +
+      lookup[(tmp << 4) & 0x3F] +
+      '=='
+    )
+  } else if (extraBytes === 2) {
+    tmp = (uint8[len - 2] << 8) + uint8[len - 1]
+    parts.push(
+      lookup[tmp >> 10] +
+      lookup[(tmp >> 4) & 0x3F] +
+      lookup[(tmp << 2) & 0x3F] +
+      '='
+    )
+  }
+
+  return parts.join('')
+}
+
+function parseQuery(queryString) {
+    var query = {};
+    var pairs = (queryString[0] === '?' ? queryString.substr(1) : queryString).split('&');
+    for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i].split('=');
+        query[decodeURIComponent(pair[0])] = decodeURIComponent(pair[1] || '');
+    }
+    return query;
+}
+const q = parseQuery(window.location.search);
+
 			// THREE.JS VIEWER
 
 			const WIDTH = viewer.offsetWidth;
@@ -107,15 +264,16 @@ limitations under the License.
 			// POLY REST API
 
 			const API_KEY = ''; // XXX put yours here
-			const ASSET_ID = 'dxsTgQdLo5-';
+      const CORS_ANYWHERE_URL = 'http://127.0.0.1:8080/';
 
-			function loadAsset( id ) {
+			function loadAsset(id) {
 
-				var url = `https://poly.googleapis.com/v1/assets/${id}/?key=${API_KEY}`;
+        var baseUrl = `https://poly.googleapis.com/v1/assets/${id}/`;
+				var url = `${baseUrl}?key=${API_KEY}`;
 
 				var request = new XMLHttpRequest();
 				request.open( 'GET', url, true );
-				request.addEventListener( 'load', function ( event ) {
+				request.addEventListener( 'load', async function ( event ) {
 
 					var asset = JSON.parse( event.target.response );
 
@@ -129,20 +287,15 @@ limitations under the License.
 					if ( format !== undefined ) {
 
 						var obj = format.root;
-						// var mtl = format.resources.find( resource => { return resource.url.endsWith( 'mtl' ) } );
 
 						var path = obj.url.slice( 0, obj.url.indexOf( obj.relativePath ) );
 
-
 						var loader = new THREE.GLTFLoader();
-						// loader.setMaterials( materials );
-						function onload ( object ) {
-
-							object = object.scene;
-
-							console.log('got object', object);
-
-							var box = new THREE.Box3();
+            function onload3(object) {
+              console.log('object 2', object);
+              object = object.scene;
+            
+              var box = new THREE.Box3();
 							box.setFromObject( object );
 
 							// re-center
@@ -157,17 +310,36 @@ limitations under the License.
 							scaler.add( object );
 							scaler.scale.setScalar( 6 / box.getSize().length() );
 							scene.add( scaler );
+              
+              return () => {
+                scene.remove(scaler);
+              };
+            }
+            function onload2(object) {
+              console.log('object 1', object);
+              const remove = onload3(object);
+              object = object.scene;
 
-							var exporter = new THREE.GLTFExporter();
+              return; // XXX
+              
+              var exporter = new THREE.GLTFExporter();
 
 							exporter.parse( object, gltf => {
-                const blob = new Blob([gltf], {
+                console.log('got export', gltf);
+                const u = URL.createObjectURL(new Blob([gltf], {
                 	type: 'application/octet-stream',
-                });
-                const u = URL.createObjectURL(blob);
+                }));
                 console.log('got gltf', gltf, u);
 
-                a = document.createElement('a');
+                remove();
+                loader.load(u, onload3, xhr => {}, err => {
+                  var loader = new THREE.LegacyGLTFLoader();
+                  loader.load(u, onload3, xhr => {}, err => {
+                    console.warn(err.stack);
+                  });
+                });
+                
+                const a = document.createElement('a');
 								document.body.appendChild(a);
 								a.download = 'model.glb';
 								a.href = u;
@@ -176,14 +348,84 @@ limitations under the License.
                 binary: true,
 							});
 
-						}
-						loader.load( obj.url, onload, xhr => {}, err => {
-               var loader = new THREE.LegacyGLTFLoader();
-               loader.load(obj.url, onload, xhr => {}, err => {
-                 console.warn(err.stack);
-               });
-						});
+            }
+              
+              const res = await fetch(CORS_ANYWHERE_URL + obj.url, {
+                mode: 'cors',
+              });
+              if (!(res.status >= 200 && res.status < 300)) {
+                throw new Error(`fail ${status}`);
+              }
+              let s = await res.text();
+              const regexp = /("uri"\s*:\s*")((?!data:)[^"]+)(")/mg;
+              const mappings = [];
+              let startIndex = 0;
+              for (;;) {
+                const match = regexp.exec(s);
+                if (match) {
+                  let u = match[2];
+                  console.log(u);
+                  if (!/^https:/.test(u)) {
+                    u = path + u;
+                  }
+                  const res = await fetch(CORS_ANYWHERE_URL + u, {
+                    mode: 'cors',
+                  });
+                  if (!(res.status >= 200 && res.status < 300)) {
+                    throw new Error(`fail ${status}`);
+                  }
+                  const ab = await res.arrayBuffer();
+                  
+                  const endIndex = match.index + match[0].length;
+                  mappings.push({
+                    pre: [startIndex, match.index],
+                    pre2: match[1],
+                    ab,
+                    post: match[3],
+                  });
+                  startIndex = endIndex;
 
+                } else {
+                  mappings.push({
+                    pre: [startIndex, s.length],
+                    pre2: '',
+                    ab: new ArrayBuffer(0),
+                    post: '',
+                  });
+                  break;
+                }
+              }
+
+              let s2 = '';
+              for (let i = 0; i < mappings.length; i++) {
+                const {pre, pre2, ab, post} = mappings[i];
+                s2 += s.slice(pre[0], pre[1]);
+                s2 += pre2;
+                if (ab.byteLength > 0) {
+                  s2 += 'data:application/octet-stream;base64,';
+                  s2 += fromByteArray(new Uint8Array(ab));
+                }
+                s2 += post;
+              }
+              console.log('done', s2.length);
+              
+              const u = URL.createObjectURL(new Blob([s2], {
+                type: 'application/octet-stream',
+              }));
+              
+              loader.load(u, onload2, xhr => {}, err => {
+                var loader = new THREE.LegacyGLTFLoader();
+                loader.load(u, onload2, xhr => {}, err => {
+                  console.warn(err.stack);
+                });
+              });
+
+              // XXX
+              const a = document.createElement('a');
+              document.body.appendChild(a);
+              a.download = 'model.glb';
+              a.href = u;
+              a.click();
 					}
 
 				} );
@@ -197,7 +439,7 @@ limitations under the License.
 
 			}
 
-			loadAsset( ASSET_ID );
+			loadAsset( q.a );
 
 		</script>
 	</body>
